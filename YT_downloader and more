@@ -1,0 +1,160 @@
+import os
+import threading
+from yt_dlp import YoutubeDL
+from PyQt5 import QtWidgets
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QProgressBar
+
+
+class YouTubeDownloader(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("YouTube Downloader (Bartłomiej Matłok)")
+        self.setGeometry(700, 200, 600, 500)
+
+        self.video_info = None
+        self.save_directory = None
+        self.downloading = False
+        self.initUI()
+
+    def initUI(self):
+        # Etykieta: Link do filmu
+        self.link_label = QtWidgets.QLabel(self)
+        self.link_label.setText("Podaj link do filmu:")
+        self.link_label.setGeometry(50, 30, 200, 30)
+
+        # Pole tekstowe: Link
+        self.link_input = QtWidgets.QLineEdit(self)
+        self.link_input.setGeometry(50, 60, 500, 30)
+
+        # Przycisk: Wybierz folder
+        self.folder_button = QtWidgets.QPushButton("Wybierz folder", self)
+        self.folder_button.setGeometry(50, 100, 150, 30)
+        self.folder_button.clicked.connect(self.choose_folder)
+
+        # Etykieta: Wybrany folder
+        self.folder_label = QtWidgets.QLabel(self)
+        self.folder_label.setText("Folder: Nie wybrano")
+        self.folder_label.setGeometry(220, 100, 400, 30)
+
+        # Przycisk: Pobierz informacje o filmie
+        self.fetch_button = QtWidgets.QPushButton("Pobierz informacje o filmie", self)
+        self.fetch_button.setGeometry(50, 140, 200, 30)
+        self.fetch_button.clicked.connect(self.fetch_video_info)
+
+        # Etykieta: Link do filmu
+        self.link_label = QtWidgets.QLabel(self)
+        self.link_label.setText("Wybierz rozdzielczość lub audio do pobrania.")
+        self.link_label.setGeometry(50, 170, 300, 30)
+
+        # Lista: Dostępne opcje
+        self.quality_list = QtWidgets.QListWidget(self)
+        self.quality_list.setGeometry(50, 200, 500, 200)
+
+        # Pasek postępu
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setGeometry(50, 410, 500, 30)
+        self.progress_bar.setValue(0)
+
+        # Przycisk: Pobierz
+        self.download_button = QtWidgets.QPushButton("Pobierz", self)
+        self.download_button.setGeometry(50, 450, 100, 30)
+        self.download_button.clicked.connect(self.start_download_thread)
+
+        # Przycisk: Zatrzymaj
+        self.stop_button = QtWidgets.QPushButton("Zatrzymaj", self)
+        self.stop_button.setGeometry(160, 450, 100, 30)
+        self.stop_button.clicked.connect(self.stop_download)
+
+    def choose_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Wybierz folder zapisu")
+        if folder:
+            self.save_directory = folder
+            self.folder_label.setText(f"Folder: {folder}")
+
+    def fetch_video_info(self):
+        link = self.link_input.text()
+        if not link:
+            QMessageBox.warning(self, "Błąd", "Wprowadź link do filmu.")
+            return
+
+        try:
+            options = {"quiet": True}
+            with YoutubeDL(options) as ydl:
+                self.video_info = ydl.extract_info(link, download=False)
+
+            self.quality_list.clear()
+            formats = self.video_info.get("formats", [])
+            for f in formats:
+                resolution = f.get("resolution", "Audio")
+                fps = f.get("fps", "-")
+                format_id = f.get("format_id", "unknown")
+                self.quality_list.addItem(f"Format ID: {format_id} | {resolution} @ {fps}fps")
+
+            QMessageBox.information(self, "Sukces", f"Pobrano informacje o filmie: {self.video_info['title']}")
+        except Exception as e:
+            QMessageBox.critical(self, "Błąd", f"Wystąpił błąd podczas pobierania informacji: {e}")
+
+    def start_download_thread(self):
+        download_thread = threading.Thread(target=self.download_video)
+        download_thread.start()
+
+    def download_video(self):
+        if not self.video_info:
+            QMessageBox.warning(self, "Błąd", "Najpierw pobierz informacje o filmie.")
+            return
+
+        if not self.save_directory:
+            QMessageBox.warning(self, "Błąd", "Wybierz folder zapisu.")
+            return
+
+        selected_items = self.quality_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Błąd", "Wybierz jakość do pobrania.")
+            return
+
+        selected_text = selected_items[0].text()
+        format_id = selected_text.split("|")[0].strip().split(":")[1].strip()
+
+        try:
+            self.downloading = True
+            options = {
+                "format": f"{format_id}+bestaudio/best",  # Pobieranie wideo i audio (jeśli osobne, połączy)
+                "merge_output_format": "mp4",  # Format wyjściowy po połączeniu
+                "outtmpl": os.path.join(self.save_directory, "%(title)s.%(ext)s"),
+                "progress_hooks": [self.update_progress],
+            }
+
+            with YoutubeDL(options) as ydl:
+                ydl.download([self.video_info["webpage_url"]])
+
+            if self.downloading:
+                QMessageBox.information(self, "Sukces", "Plik został pobrany!")
+        except Exception as e:
+            if self.downloading:
+                QMessageBox.critical(self, "Błąd", f"Wystąpił błąd podczas pobierania: {e}")
+
+    def stop_download(self):
+        if self.downloading:
+            self.downloading = False
+            QMessageBox.information(self, "Przerwano", "Pobieranie zostało zatrzymane.")
+
+    def update_progress(self, d):
+        if not self.downloading:
+            raise Exception("Pobieranie zostało przerwane przez użytkownika.")
+
+        if d["status"] == "downloading":
+            downloaded = d.get("downloaded_bytes", 0)
+            total = d.get("total_bytes", 1)
+            progress = int(downloaded / total * 100)
+            self.progress_bar.setValue(progress)
+        elif d["status"] == "finished":
+            self.progress_bar.setValue(100)
+
+
+if __name__ == "__main__":
+    import sys
+
+    app = QApplication(sys.argv)
+    main_window = YouTubeDownloader()
+    main_window.show()
+    sys.exit(app.exec_())
